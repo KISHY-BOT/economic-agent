@@ -1,3 +1,8 @@
 {
-  "build": { "builder": "NIXPACKS" }
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "python worker.py"
+  }
 }
