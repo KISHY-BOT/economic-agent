@@ -2,7 +2,14 @@
   "build": {
     "builder": "NIXPACKS"
   },
-  "deploy": {
-    "startCommand": "python worker.py"
-  }
+  "deploy": [
+    {
+      "service": "web",
+      "startCommand": "uvicorn app:app --host 0.0.0.0 --port 8080"
+    },
+    {
+      "service": "worker",
+      "startCommand": "python worker.py"
+    }
+  ]
 }
