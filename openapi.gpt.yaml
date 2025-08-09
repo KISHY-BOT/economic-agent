@@ -1,0 +1,164 @@
+openapi: 3.1.0
+info:
+  title: Economic Agent API (Hybrid-Pro)
+  version: "2.0.0"
+servers:
+  - url: https://YOUR_RAILWAY_URL
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+paths:
+  /health:
+    get:
+      operationId: health
+      summary: Health check
+      responses:
+        "200":
+          description: OK
+  /metrics:
+    get:
+      operationId: metrics
+      summary: Basic metrics
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: OK
+  /run:
+    post:
+      operationId: runAnalysis
+      summary: Ejecuta el agente económico (sync/async)
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                horizon:
+                  type: integer
+                  default: 30
+                models:
+                  type: array
+                  items:
+                    type: string
+                  default: ["arima","random_forest","monte_carlo"]
+                series:
+                  type: object
+                  nullable: true
+                notes:
+                  type: string
+                  nullable: true
+                async_mode:
+                  type: boolean
+                  default: false
+      responses:
+        "200":
+          description: Resultado del agente o job encolado
+          content:
+            application/json:
+              schema:
+                type: object
+  /status/{job_id}:
+    get:
+      operationId: jobStatus
+      summary: Estado de un job asíncrono
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+  /bcra/principales-variables:
+    get:
+      operationId: bcraPrincipalesVariables
+      summary: Lista de variables monetarias (BCRA)
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: OK
+  /bcra/principales-variables/{variable_id}:
+    get:
+      operationId: bcraPrincipalesVariablesData
+      summary: Series de una variable monetaria
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: variable_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: OK
+  /bcra/estadisticas-cambiarias/cotizaciones:
+    get:
+      operationId: bcraCambiariasCotizaciones
+      summary: Lista de cotizaciones de divisas (BCRA)
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: OK
+  /bcra/cheques-denunciados:
+    get:
+      operationId: bcraChequesDenunciados
+      summary: Consulta de cheques denunciados
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: numero
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: cuit
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+  /bcra/deudores:
+    get:
+      operationId: bcraDeudores
+      summary: Informe consolidado de la Central de Deudores
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: cuit
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+  /bcra/passthrough:
+    get:
+      operationId: bcraPassthrough
+      summary: Proxy GET a https://api.bcra.gob.ar
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
