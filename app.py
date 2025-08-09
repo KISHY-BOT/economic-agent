@@ -129,14 +129,32 @@ def bcra_passthrough(path: str = Query(...), x_api_key: Optional[str] = Header(d
 def _run_agent_sync(cfg: RunConfig) -> Dict[str, Any]:
     if analysis_agent is None:
         raise RuntimeError("analysis_agent not available")
+
+    # Ejecutar el agente intentando pasarle los parámetros
     if hasattr(analysis_agent, "demonstrate_agent"):
         try:
-            return analysis_agent.demonstrate_agent(
-                horizon=cfg.horizon, models=cfg.models, series=cfg.series, notes=cfg.notes
+            res = analysis_agent.demonstrate_agent(
+                horizon=cfg.horizon,
+                models=cfg.models,
+                series=cfg.series,
+                notes=cfg.notes,
             )
         except TypeError:
-            return analysis_agent.demonstrate_agent()
-    raise RuntimeError("demonstrate_agent not found in analysis_agent")
+            # Compatibilidad si no acepta kwargs
+            res = analysis_agent.demonstrate_agent()
+    else:
+        raise RuntimeError("demonstrate_agent not found in analysis_agent")
+
+    # 🔧 Fallback: si el agente no devuelve nada, construimos un resultado mínimo
+    if res is None:
+        res = {
+            "message": "Agent executed with no explicit return",
+            "horizon": cfg.horizon,
+            "models": cfg.models,
+            "timestamp": int(time.time()),
+        }
+
+    return res
 
 def _worker_thread(job_id: str, cfg: RunConfig):
     _jobs[job_id]["status"] = "running"
