@@ -4,6 +4,7 @@ import threading
 import uuid
 from typing import Optional, Dict, Any
 from fastapi import FastAPI, Header, HTTPException, Request, Query
+from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import requests
@@ -58,7 +59,7 @@ class RunConfig(BaseModel):
 def health():
     return {"status": "ok"}
 
-@app.get("/metrics", response_class=None)
+@app.get("/metrics", response_class=PlainTextResponse)
 def metrics():
     total_jobs = len(_jobs)
     running = sum(1 for j in _jobs.values() if j.get("status") == "running")
