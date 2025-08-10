@@ -3,7 +3,6 @@ pandas==2.2.2
 requests==2.32.3
 scikit-learn==1.4.2
 statsmodels==0.14.2
-fastapi
-uvicorn
-requests
-pydantic
+fastapi==0.110.0
+uvicorn==0.29.0
+pydantic==2.7.1
