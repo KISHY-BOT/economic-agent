@@ -1,164 +1,345 @@
 openapi: 3.1.0
 info:
   title: Economic Agent API (Hybrid-Pro)
-  version: "2.0.0"
+  version: "2.1.0"
+
 servers:
-  - url: https://YOUR_RAILWAY_URL
+  - url: https://economic-agent-production.up.railway.app
+
+security:
+  - ApiKeyAuth: []
+
 components:
   securitySchemes:
     ApiKeyAuth:
       type: apiKey
       in: header
-      name: X-API-Key
+      name: x-api-key
+
+  schemas:
+    RunConfig:
+      type: object
+      properties:
+        horizon:
+          type: integer
+          default: 30
+          minimum: 1
+        models:
+          type: array
+          items:
+            type: string
+            enum: [arima, random_forest, monte_carlo]
+          default: [arima, random_forest, monte_carlo]
+        series:
+          type: object
+          nullable: true
+          description: Serie opcional provista por el usuario.
+        notes:
+          type: string
+          nullable: true
+        async_mode:
+          type: boolean
+          default: false
+      # (Se quitó 'required: [horizon]' para alinear con el default del backend)
+
+    AgentResult:
+      type: object
+      description: Resultado agregado del agente; campos pueden variar según modelos disponibles.
+      properties:
+        inputs:
+          type: object
+          properties:
+            oficial_last: { type: number, nullable: true }
+            mep_last: { type: number, nullable: true }
+            timestamp: { type: string, description: ISO 8601 }
+        params:
+          type: object
+          properties:
+            horizon: { type: integer }
+            models:
+              type: array
+              items: { type: string, enum: [arima, random_forest, monte_carlo] }
+            notes: { type: string, nullable: true }
+        arima_forecasts:
+          type: array
+          items: { type: number }
+        random_forest_forecasts:
+          type: array
+          items: { type: number }
+        montecarlo:
+          type: object
+          properties:
+            expected_terminal_value: { type: number, nullable: true }
+            var_95: { type: number, nullable: true }
+        notice:
+          type: string
+          description: Nota informativa (p. ej., ausencia de MEP).
+        warnings:
+          type: array
+          items: { type: string }
+        timestamp:
+          type: string
+          description: ISO 8601
+
+    RunSyncResponse:
+      type: object
+      properties:
+        result:
+          $ref: '#/components/schemas/AgentResult'
+      required: [result]
+
+    RunAsyncResponse:
+      type: object
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          example: "23cd9fd9-ed33-48c2-acdb-ecafed064fa9"
+        status:
+          type: string
+          enum: [queued, running]
+          example: queued
+      required: [job_id, status]
+
+    JobStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [queued, running, done, failed]
+        config:
+          $ref: '#/components/schemas/RunConfig'
+        result:
+          $ref: '#/components/schemas/AgentResult'
+        error:
+          type: string
+      required: [status]
+
+    BcraPassthroughResponse:
+      oneOf:
+        - type: object
+          description: BCRA devolvió JSON; se reenvía como tal.
+          properties: {}
+          additionalProperties: {}
+        - type: object
+          description: BCRA devolvió texto; se envuelve con tipo de contenido.
+          required: [content, content_type]
+          properties:
+            content:
+              type: string
+            content_type:
+              type: string
+
+  responses:
+    Unauthorized:
+      description: API key inválida o ausente.
+    TooManyRequests:
+      description: Rate limit excedido.
+    UpstreamError:
+      description: Error del upstream BCRA.
+    UpstreamTimeout:
+      description: Timeout al conectar con BCRA.
+
 paths:
   /health:
     get:
       operationId: health
-      summary: Health check
+      summary: Health
+      security: []
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  bcra_status: { type: string, example: active }
+
   /metrics:
     get:
       operationId: metrics
-      summary: Basic metrics
-      security:
-        - ApiKeyAuth: []
+      summary: Métricas (Prometheus text)
+      security: []
       responses:
         "200":
           description: OK
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /bcra/principales-variables:
+    get:
+      operationId: bcraPrincipalesVariables
+      summary: Listado de principales variables del BCRA
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BcraPassthroughResponse'
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/TooManyRequests' }
+        "502": { $ref: '#/components/responses/UpstreamError' }
+        "504": { $ref: '#/components/responses/UpstreamTimeout' }
+
+  /bcra/principales-variables/{variable_id}:
+    get:
+      operationId: bcraPrincipalesVariablesData
+      summary: Series de una variable del BCRA
+      parameters:
+        - in: path
+          name: variable_id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BcraPassthroughResponse'
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/TooManyRequests' }
+        "502": { $ref: '#/components/responses/UpstreamError' }
+        "504": { $ref: '#/components/responses/UpstreamTimeout' }
+
+  /bcra/estadisticas-cambiarias/cotizaciones:
+    get:
+      operationId: bcraCotizaciones
+      summary: Cotizaciones cambiarias del BCRA
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BcraPassthroughResponse'
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/TooManyRequests' }
+        "502": { $ref: '#/components/responses/UpstreamError' }
+        "504": { $ref: '#/components/responses/UpstreamTimeout' }
+
+  /bcra/cheques-denunciados:
+    get:
+      operationId: bcraChequesDenunciados
+      summary: Cheques denunciados
+      parameters:
+        - in: query
+          name: numero
+          schema: { type: string }
+        - in: query
+          name: cuit
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BcraPassthroughResponse'
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/TooManyRequests' }
+        "502": { $ref: '#/components/responses/UpstreamError' }
+        "504": { $ref: '#/components/responses/UpstreamTimeout' }
+
+  /bcra/deudores:
+    get:
+      operationId: bcraDeudores
+      summary: Central de Deudores por CUIT (formato XX-XXXXXXXX-X)
+      parameters:
+        - in: query
+          name: cuit
+          required: true
+          schema:
+            type: string
+            pattern: "^[0-9]{2}-[0-9]{8}-[0-9]{1}$"
+            example: "20-12345678-9"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BcraPassthroughResponse'
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/TooManyRequests' }
+        "502": { $ref: '#/components/responses/UpstreamError' }
+        "504": { $ref: '#/components/responses/UpstreamTimeout' }
+
+  /bcra/passthrough:
+    get:
+      operationId: bcraPassthrough
+      summary: Proxy a cualquier path público del BCRA
+      parameters:
+        - in: query
+          name: path
+          required: true
+          description: >
+            Path comenzando con "/" y URL-encoded. Ej: /estadisticas/v1.0/principalesvariables
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BcraPassthroughResponse'
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/TooManyRequests' }
+        "502": { $ref: '#/components/responses/UpstreamError' }
+        "504": { $ref: '#/components/responses/UpstreamTimeout' }
+
   /run:
     post:
-      operationId: runAnalysis
-      summary: Ejecuta el agente económico (sync/async)
-      security:
-        - ApiKeyAuth: []
+      operationId: runAgent
+      summary: Ejecuta el agente económico (sync o async)
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                horizon:
-                  type: integer
-                  default: 30
-                models:
-                  type: array
-                  items:
-                    type: string
-                  default: ["arima","random_forest","monte_carlo"]
-                series:
-                  type: object
-                  nullable: true
-                notes:
-                  type: string
-                  nullable: true
-                async_mode:
-                  type: boolean
-                  default: false
+              $ref: '#/components/schemas/RunConfig'
+            examples:
+              sync:
+                summary: Ejecución síncrona
+                value: { "horizon": 5, "models": ["arima","random_forest"], "async_mode": false }
+              async:
+                summary: Ejecución asíncrona
+                value: { "horizon": 5, "models": ["arima","random_forest"], "async_mode": true }
       responses:
         "200":
-          description: Resultado del agente o job encolado
+          description: OK
           content:
             application/json:
               schema:
-                type: object
+                oneOf:
+                  - $ref: '#/components/schemas/RunSyncResponse'
+                  - $ref: '#/components/schemas/RunAsyncResponse'
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/TooManyRequests' }
+
   /status/{job_id}:
     get:
       operationId: jobStatus
       summary: Estado de un job asíncrono
-      security:
-        - ApiKeyAuth: []
       parameters:
-        - name: job_id
-          in: path
+        - in: path
+          name: job_id
           required: true
-          schema:
-            type: string
+          schema: { type: string }
+          example: "23cd9fd9-ed33-48c2-acdb-ecafed064fa9"
       responses:
         "200":
           description: OK
-  /bcra/principales-variables:
-    get:
-      operationId: bcraPrincipalesVariables
-      summary: Lista de variables monetarias (BCRA)
-      security:
-        - ApiKeyAuth: []
-      responses:
-        "200":
-          description: OK
-  /bcra/principales-variables/{variable_id}:
-    get:
-      operationId: bcraPrincipalesVariablesData
-      summary: Series de una variable monetaria
-      security:
-        - ApiKeyAuth: []
-      parameters:
-        - name: variable_id
-          in: path
-          required: true
-          schema:
-            type: integer
-      responses:
-        "200":
-          description: OK
-  /bcra/estadisticas-cambiarias/cotizaciones:
-    get:
-      operationId: bcraCambiariasCotizaciones
-      summary: Lista de cotizaciones de divisas (BCRA)
-      security:
-        - ApiKeyAuth: []
-      responses:
-        "200":
-          description: OK
-  /bcra/cheques-denunciados:
-    get:
-      operationId: bcraChequesDenunciados
-      summary: Consulta de cheques denunciados
-      security:
-        - ApiKeyAuth: []
-      parameters:
-        - name: numero
-          in: query
-          required: false
-          schema:
-            type: string
-        - name: cuit
-          in: query
-          required: false
-          schema:
-            type: string
-      responses:
-        "200":
-          description: OK
-  /bcra/deudores:
-    get:
-      operationId: bcraDeudores
-      summary: Informe consolidado de la Central de Deudores
-      security:
-        - ApiKeyAuth: []
-      parameters:
-        - name: cuit
-          in: query
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: OK
-  /bcra/passthrough:
-    get:
-      operationId: bcraPassthrough
-      summary: Proxy GET a https://api.bcra.gob.ar
-      security:
-        - ApiKeyAuth: []
-      parameters:
-        - name: path
-          in: query
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatus'
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/TooManyRequests' }
+        "404":
+          description: Job no encontrado
