@@ -171,6 +171,8 @@ paths:
                 type: string
 
   /bcra/principales-variables:
+     servers:
+      - url: https://economic-agent-production.up.railway.app
     get:
       operationId: bcraPrincipalesVariables
       summary: Listado de principales variables del BCRA
@@ -187,6 +189,8 @@ paths:
         "504": { $ref: '#/components/responses/UpstreamTimeout' }
 
   /bcra/principales-variables/{variable_id}:
+     servers:
+      - url: https://economic-agent-production.up.railway.app
     get:
       operationId: bcraPrincipalesVariablesData
       summary: Series de una variable del BCRA
@@ -208,6 +212,8 @@ paths:
         "504": { $ref: '#/components/responses/UpstreamTimeout' }
 
   /bcra/estadisticas-cambiarias/cotizaciones:
+     servers:
+      - url: https://economic-agent-production.up.railway.app
     get:
       operationId: bcraCotizaciones
       summary: Cotizaciones cambiarias del BCRA
@@ -224,6 +230,8 @@ paths:
         "504": { $ref: '#/components/responses/UpstreamTimeout' }
 
   /bcra/cheques-denunciados:
+     servers:
+      - url: https://economic-agent-production.up.railway.app
     get:
       operationId: bcraChequesDenunciados
       summary: Cheques denunciados
@@ -247,6 +255,8 @@ paths:
         "504": { $ref: '#/components/responses/UpstreamTimeout' }
 
   /bcra/deudores:
+     servers:
+      - url: https://economic-agent-production.up.railway.app
     get:
       operationId: bcraDeudores
       summary: Central de Deudores por CUIT (formato XX-XXXXXXXX-X)
@@ -271,6 +281,8 @@ paths:
         "504": { $ref: '#/components/responses/UpstreamTimeout' }
 
   /bcra/passthrough:
+     servers:
+      - url: https://economic-agent-production.up.railway.app
     get:
       operationId: bcraPassthrough
       summary: Proxy a cualquier path público del BCRA
