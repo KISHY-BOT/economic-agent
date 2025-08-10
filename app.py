@@ -14,9 +14,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import requests
 
-# ======================
-# Configuración inicial
-# ======================
 # Configurar logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -68,9 +65,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ======================
-# Helpers mejorados
-# ======================
 def _require_api_key(x_api_key: Optional[str]):
     if not API_KEY:
         return
@@ -102,9 +96,6 @@ class RunConfig(BaseModel):
     notes: Optional[str] = None
     async_mode: bool = False
 
-# ======================
-# BCRA Passthroughs Corregidos
-# ======================
 def _bcra_get(path: str, params: Optional[Dict[str, Any]] = None):
     url = BCRA_BASE.rstrip("/") + "/" + path.lstrip("/")
     try:
@@ -201,9 +192,6 @@ def bcra_passthrough(
     _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
     return _bcra_get(path)
 
-# ======================
-# Health & Metrics
-# ======================
 @app.get("/health")
 def health():
     return {"status": "ok", "bcra_status": "active"}
@@ -231,9 +219,6 @@ def metrics():
     ]
     return "\n".join(lines)
 
-# ======================
-# Agent Runner Mejorado
-# ======================
 def _run_agent_sync(cfg: RunConfig) -> Dict[str, Any]:
     if analysis_agent is None:
         raise RuntimeError("analysis_agent no disponible")
