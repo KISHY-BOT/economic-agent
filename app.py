@@ -2,10 +2,6 @@ import os
 import time
 import threading
 import uuid
-import json
-import atexit
-import logging
-import re
 from typing import Optional, Dict, Any
 
 from fastapi import FastAPI, Header, HTTPException, Request, Query
@@ -14,48 +10,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import requests
 
-# Configurar logging
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
-
-# Validar variables críticas
+# ======================
+# Config
+# ======================
 API_KEY = os.getenv("API_KEY")
-BCRA_BASE = os.getenv("BCRA_BASE_URL", "https://api.bcra.gob.ar")
-BCRA_TIMEOUT = int(os.getenv("BCRA_TIMEOUT", "15"))
-
-if not BCRA_BASE:
-    logger.error("BCRA_BASE_URL no está configurada")
-    raise RuntimeError("BCRA_BASE_URL no configurada")
-
 RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "60"))
-
-# Persistencia de jobs
-JOBS_FILE = "jobs.json"
+BCRA_BASE = os.getenv("BCRA_BASE_URL", "https://api.bcra.gob.ar")
 
 _rate_buckets: Dict[str, list] = {}
 _jobs: Dict[str, Dict[str, Any]] = {}
 
-# Cargar jobs persistentes
-try:
-    if os.path.exists(JOBS_FILE):
-        with open(JOBS_FILE, "r") as f:
-            _jobs = json.load(f)
-        logger.info(f"Cargados {len(_jobs)} jobs desde disco")
-except Exception as e:
-    logger.error(f"Error cargando jobs: {str(e)}")
-
-# Guardar jobs al salir
-def _save_jobs():
-    try:
-        with open(JOBS_FILE, "w") as f:
-            json.dump(_jobs, f)
-        logger.info(f"Jobs guardados: {len(_jobs)}")
-    except Exception as e:
-        logger.error(f"Error guardando jobs: {str(e)}")
-
-atexit.register(_save_jobs)
-
-app = FastAPI(title="Economic Agent API (Hybrid-Pro)", version="2.1.0")
+app = FastAPI(title="Economic Agent API (Hybrid-Pro)", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -65,7 +30,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ======================
+# Helpers
+# ======================
 def _require_api_key(x_api_key: Optional[str]):
+    # Si no definiste API_KEY en el entorno, no exige clave (modo dev)
     if not API_KEY:
         return
     if x_api_key != API_KEY:
@@ -76,17 +45,17 @@ def _rate_limit(key: str):
         return
     now = time.time()
     bucket = _rate_buckets.setdefault(key, [])
+    # limpiar ventana de 60s
     while bucket and now - bucket[0] > 60:
         bucket.pop(0)
     if len(bucket) >= RATE_LIMIT_PER_MIN:
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
     bucket.append(now)
 
-# Análisis
+# análisis
 try:
     import analysis_agent
-except Exception as e:
-    logger.error(f"Error importing analysis_agent: {str(e)}")
+except Exception:
     analysis_agent = None
 
 class RunConfig(BaseModel):
@@ -96,51 +65,59 @@ class RunConfig(BaseModel):
     notes: Optional[str] = None
     async_mode: bool = False
 
+# ======================
+# Health & Metrics
+# ======================
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+@app.get("/metrics", response_class=PlainTextResponse)
+def metrics():
+    total_jobs = len(_jobs)
+    running = sum(1 for j in _jobs.values() if j.get("status") == "running")
+    done = sum(1 for j in _jobs.values() if j.get("status") == "done")
+    failed = sum(1 for j in _jobs.values() if j.get("status") == "failed")
+    lines = [
+        "# HELP econ_jobs_total Total jobs seen",
+        "# TYPE econ_jobs_total gauge",
+        f"econ_jobs_total {total_jobs}",
+        "# HELP econ_jobs_running Jobs currently running",
+        "# TYPE econ_jobs_running gauge",
+        f"econ_jobs_running {running}",
+        "# HELP econ_jobs_done Jobs finished successfully",
+        "# TYPE econ_jobs_done gauge",
+        f"econ_jobs_done {done}",
+        "# HELP econ_jobs_failed Jobs failed",
+        "# TYPE econ_jobs_failed gauge",
+        f"econ_jobs_failed {failed}",
+    ]
+    return "\n".join(lines)
+
+# ======================
+# BCRA Passthroughs
+# ======================
 def _bcra_get(path: str, params: Optional[Dict[str, Any]] = None):
     url = BCRA_BASE.rstrip("/") + "/" + path.lstrip("/")
+    r = requests.get(url, params=params, timeout=30)
     try:
-        logger.info(f"Request to BCRA: {url}")
-        r = requests.get(url, params=params, timeout=BCRA_TIMEOUT)
         r.raise_for_status()
-
-        # Manejar diferentes tipos de respuesta
-        content_type = r.headers.get('Content-Type', '')
-        if 'application/json' in content_type:
-            return r.json()
-        else:
-            return {"content": r.text, "content_type": content_type}
-
     except requests.HTTPError as e:
-        error_detail = r.text if r.text else str(e)
-        if len(error_detail) > 500:
-            error_detail = error_detail[:500] + "... [truncated]"
+        # Propagar detalle del BCRA
+        raise HTTPException(status_code=r.status_code, detail=r.text or str(e))
+    try:
+        return r.json()
+    except Exception:
+        return {"status": "ok", "body": r.text}
 
-        logger.error(f"BCRA error {r.status_code}: {error_detail}")
-
-        if r.status_code == 404:
-            raise HTTPException(status_code=404, detail="Recurso no encontrado")
-        else:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Error BCRA [{r.status_code}]: {error_detail}"
-            )
-
-    except requests.Timeout:
-        logger.error("BCRA timeout")
-        raise HTTPException(status_code=504, detail="Timeout al conectar con BCRA")
-
-    except Exception as e:
-        logger.error(f"BCRA connection error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
-
-# Rutas BCRA actualizadas según documentación oficial
 @app.get("/bcra/principales-variables")
 def principales_variables_list(
     x_api_key: Optional[str] = Header(default=None),
     request: Request = None
 ):
     _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
-    return _bcra_get("/estadisticas/v1.0/principalesvariables")
+    # Ejemplo: catálogo de variables monetarias (ruta de ejemplo de BCRA)
+    return _bcra_get("/estadisticas/v3.0/Monetarias")
 
 @app.get("/bcra/principales-variables/{variable_id}")
 def principales_variables_data(
@@ -149,7 +126,7 @@ def principales_variables_data(
     request: Request = None
 ):
     _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
-    return _bcra_get(f"/estadisticas/v1.0/principalesvariables/{variable_id}")
+    return _bcra_get(f"/estadisticas/v3.0/Monetarias/{variable_id}/series")
 
 @app.get("/bcra/estadisticas-cambiarias/cotizaciones")
 def cambiarias_cotizaciones(
@@ -174,14 +151,12 @@ def cheques_denunciados(
 
 @app.get("/bcra/deudores")
 def deudores(
-    cuit: str = Query(..., regex=r"^\d{2}-\d{8}-\d{1}$"),
+    cuit: str = Query(...),
     x_api_key: Optional[str] = Header(default=None),
     request: Request = None
 ):
     _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
-    # Limpiar formato CUIT (20-12345678-9 → 20123456789)
-    clean_cuit = cuit.replace("-", "")
-    return _bcra_get(f"/deudores/v1.0/informe/{clean_cuit}")
+    return _bcra_get(f"/deudores/v1.0/informe/{cuit}")
 
 @app.get("/bcra/passthrough")
 def bcra_passthrough(
@@ -192,36 +167,12 @@ def bcra_passthrough(
     _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
     return _bcra_get(path)
 
-@app.get("/health")
-def health():
-    return {"status": "ok", "bcra_status": "active"}
-
-@app.get("/metrics", response_class=PlainTextResponse)
-def metrics():
-    total_jobs = len(_jobs)
-    running = sum(1 for j in _jobs.values() if j.get("status") == "running")
-    done = sum(1 for j in _jobs.values() if j.get("status") == "done")
-    failed = sum(1 for j in _jobs.values() if j.get("status") == "failed")
-
-    lines = [
-        "# HELP econ_jobs_total Total jobs seen",
-        "# TYPE econ_jobs_total gauge",
-        f"econ_jobs_total {total_jobs}",
-        "# HELP econ_jobs_running Jobs currently running",
-        "# TYPE econ_jobs_running gauge",
-        f"econ_jobs_running {running}",
-        "# HELP econ_jobs_done Jobs finished successfully",
-        "# TYPE econ_jobs_done gauge",
-        f"econ_jobs_done {done}",
-        "# HELP econ_jobs_failed Jobs failed",
-        "# TYPE econ_jobs_failed gauge",
-        f"econ_jobs_failed {failed}",
-    ]
-    return "\n".join(lines)
-
+# ======================
+# Agent Runner
+# ======================
 def _run_agent_sync(cfg: RunConfig) -> Dict[str, Any]:
     if analysis_agent is None:
-        raise RuntimeError("analysis_agent no disponible")
+        raise RuntimeError("analysis_agent not available")
 
     if hasattr(analysis_agent, "demonstrate_agent"):
         try:
@@ -232,27 +183,20 @@ def _run_agent_sync(cfg: RunConfig) -> Dict[str, Any]:
                 notes=cfg.notes
             )
         except TypeError:
+            # Compatibilidad con firmas antiguas sin kwargs
             return analysis_agent.demonstrate_agent()
 
-    raise RuntimeError("Función demonstrate_agent no encontrada")
+    raise RuntimeError("demonstrate_agent not found in analysis_agent")
 
 def _worker_thread(job_id: str, cfg: RunConfig):
+    _jobs[job_id]["status"] = "running"
     try:
-        _jobs[job_id]["status"] = "running"
         res = _run_agent_sync(cfg)
-        _jobs[job_id] = {
-            "status": "done",
-            "result": res,
-            "completed_at": time.time()
-        }
+        _jobs[job_id]["status"] = "done"
+        _jobs[job_id]["result"] = res
     except Exception as e:
-        _jobs[job_id] = {
-            "status": "failed",
-            "error": str(e),
-            "failed_at": time.time()
-        }
-    finally:
-        _save_jobs()
+        _jobs[job_id]["status"] = "failed"
+        _jobs[job_id]["error"] = str(e)
 
 @app.post("/run")
 def run_agent(
@@ -264,20 +208,13 @@ def run_agent(
 
     if cfg.async_mode:
         job_id = str(uuid.uuid4())
-        _jobs[job_id] = {
-            "status": "queued",
-            "config": cfg.dict(),
-            "created_at": time.time()
-        }
-        threading.Thread(
-            target=_worker_thread,
-            args=(job_id, cfg),
-            daemon=True
-        ).start()
-        _save_jobs()
-        return {"job_id": job_id, "status": "queued"}
+        _jobs[job_id] = {"status": "queued", "config": cfg.dict()}
+        t = threading.Thread(target=_worker_thread, args=(job_id, cfg), daemon=True)
+        t.start()
+        return {"ok": True, "jobId": job_id, "status": "queued"}
     else:
-        return {"result": _run_agent_sync(cfg)}
+        res = _run_agent_sync(cfg)
+        return {"ok": True, "result": res}
 
 @app.get("/status/{job_id}")
 def job_status(
@@ -286,6 +223,8 @@ def job_status(
     request: Request = None
 ):
     _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
-    if job_id not in _jobs:
-        raise HTTPException(status_code=404, detail="Job no encontrado")
-    return _jobs[job_id]
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    return job
+    
