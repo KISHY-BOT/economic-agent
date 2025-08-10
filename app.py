@@ -24,7 +24,7 @@ logging.basicConfig(level=logging.INFO)
 # Validar variables críticas
 API_KEY = os.getenv("API_KEY")
 BCRA_BASE = os.getenv("BCRA_BASE_URL", "https://api.bcra.gob.ar")
-BCRA_TIMEOUT = int(os.getenv("BCRA_TIMEOUT", "15"))
+BCRA_TIMEOUT = int(os.getenv("BCRA_TIMEOUT", "60"))
 
 if not BCRA_BASE:
     logger.error("BCRA_BASE_URL no está configurada")
