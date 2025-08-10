@@ -99,12 +99,16 @@ def metrics():
 # ======================
 def _bcra_get(path: str, params: Optional[Dict[str, Any]] = None):
     url = BCRA_BASE.rstrip("/") + "/" + path.lstrip("/")
-    r = requests.get(url, params=params, timeout=30)
+    headers = {"User-Agent": "EconomicAgent/2.0 (+https://railway.app)"}
     try:
+        r = requests.get(url, params=params, headers=headers, timeout=HTTP_TIMEOUT)
         r.raise_for_status()
+    except requests.Timeout:
+        raise HTTPException(status_code=504, detail=f"Timeout contacting BCRA: {url}")
     except requests.HTTPError as e:
-        # Propagar detalle del BCRA
         raise HTTPException(status_code=r.status_code, detail=r.text or str(e))
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Error contacting BCRA: {e}")
     try:
         return r.json()
     except Exception:
