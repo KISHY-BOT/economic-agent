@@ -306,6 +306,8 @@ paths:
         "504": { $ref: '#/components/responses/UpstreamTimeout' }
 
   /run:
+  servers:
+      - url: https://economic-agent-production.up.railway.app
     post:
       operationId: runAgent
       summary: Ejecuta el agente económico (sync o async)
@@ -335,6 +337,8 @@ paths:
         "429": { $ref: '#/components/responses/TooManyRequests' }
 
   /status/{job_id}:
+  servers:
+      - url: https://economic-agent-production.up.railway.app
     get:
       operationId: jobStatus
       summary: Estado de un job asíncrono
