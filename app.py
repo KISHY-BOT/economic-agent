@@ -143,6 +143,20 @@ def _bcra_get(path: str, params: Optional[Dict[str, Any]] = None):
         raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
 
 # Rutas BCRA actualizadas según documentación oficial
+@app.get("/bcra/monetarias/{id_var}")
+def monetarias(
+    id_var: int,
+    desde: Optional[str] = None,
+    hasta: Optional[str] = None,
+    x_api_key: Optional[str] = Header(default=None),
+    request: Request = None
+):
+    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
+    params = {}
+    if desde: params["desde"] = desde
+    if hasta: params["hasta"] = hasta
+    return _bcra_get(f"/estadisticas/v3.0/monetarias/{id_var}", params=params or None)
+
 @app.get("/bcra/principales-variables")
 def principales_variables_list(
     x_api_key: Optional[str] = Header(default=None),
@@ -230,6 +244,19 @@ def metrics():
         f"econ_jobs_failed {failed}",
     ]
     return "\n".join(lines)
+
+@app.get("/metrics.json")
+def metrics_json():
+    total_jobs = len(_jobs)
+    running = sum(1 for j in _jobs.values() if j.get("status") == "running")
+    done = sum(1 for j in _jobs.values() if j.get("status") == "done")
+    failed = sum(1 for j in _jobs.values() if j.get("status") == "failed")
+    return {
+        "econ_jobs_total": total_jobs,
+        "econ_jobs_running": running,
+        "econ_jobs_done": done,
+        "econ_jobs_failed": failed
+    }
 
 # ======================
 # Agent Runner Mejorado
