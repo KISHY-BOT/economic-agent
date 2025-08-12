@@ -169,6 +169,26 @@ paths:
             text/plain:
               schema:
                 type: string
+  
+  /metrics.json:
+    get:
+      servers:
+        - url: https://economic-agent-production.up.railway.app
+      security: []   # igual que /metrics: sin API key
+      operationId: metricsJson
+      summary: Métricas en formato JSON
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  econ_jobs_total:   { type: integer }
+                  econ_jobs_running: { type: integer }
+                  econ_jobs_done:    { type: integer }
+                  econ_jobs_failed:  { type: integer }
 
   /bcra/principales-variables:
     get:
@@ -203,6 +223,40 @@ paths:
           name: variable_id
           required: true
           schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BcraPassthroughResponse'
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/TooManyRequests' }
+        "502": { $ref: '#/components/responses/UpstreamError' }
+        "504": { $ref: '#/components/responses/UpstreamTimeout' }
+
+  /bcra/monetarias/{id_var}:
+    get:
+      servers:
+        - url: https://economic-agent-production.up.railway.app
+      security:
+        - ApiKeyAuth: []
+      operationId: bcraMonetariasById
+      summary: Serie monetaria v3 por ID con filtro de fechas
+      parameters:
+        - in: path
+          name: id_var
+          required: true
+          schema: { type: integer }
+          description: ID de la serie (p.ej. 7 = dólar oficial minorista promedio)
+        - in: query
+          name: desde
+          schema: { type: string }
+          example: "2025-08-05"
+        - in: query
+          name: hasta
+          schema: { type: string }
+          example: "2025-08-11"
       responses:
         "200":
           description: OK
