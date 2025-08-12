@@ -171,9 +171,11 @@ paths:
                 type: string
 
   /bcra/principales-variables:
-     servers:
-      - url: https://economic-agent-production.up.railway.app
     get:
+      servers:
+        - url: https://economic-agent-production.up.railway.app
+      security:
+        - ApiKeyAuth: []
       operationId: bcraPrincipalesVariables
       summary: Listado de principales variables del BCRA
       responses:
@@ -189,9 +191,11 @@ paths:
         "504": { $ref: '#/components/responses/UpstreamTimeout' }
 
   /bcra/principales-variables/{variable_id}:
-     servers:
-      - url: https://economic-agent-production.up.railway.app
     get:
+      servers:
+        - url: https://economic-agent-production.up.railway.app
+      security:
+        - ApiKeyAuth: []
       operationId: bcraPrincipalesVariablesData
       summary: Series de una variable del BCRA
       parameters:
@@ -212,9 +216,11 @@ paths:
         "504": { $ref: '#/components/responses/UpstreamTimeout' }
 
   /bcra/estadisticas-cambiarias/cotizaciones:
-     servers:
-      - url: https://economic-agent-production.up.railway.app
     get:
+      servers:
+        - url: https://economic-agent-production.up.railway.app
+      security:
+        - ApiKeyAuth: []
       operationId: bcraCotizaciones
       summary: Cotizaciones cambiarias del BCRA
       responses:
@@ -230,9 +236,11 @@ paths:
         "504": { $ref: '#/components/responses/UpstreamTimeout' }
 
   /bcra/cheques-denunciados:
-     servers:
-      - url: https://economic-agent-production.up.railway.app
     get:
+      servers:
+        - url: https://economic-agent-production.up.railway.app
+      security:
+        - ApiKeyAuth: []
       operationId: bcraChequesDenunciados
       summary: Cheques denunciados
       parameters:
@@ -255,9 +263,11 @@ paths:
         "504": { $ref: '#/components/responses/UpstreamTimeout' }
 
   /bcra/deudores:
-     servers:
-      - url: https://economic-agent-production.up.railway.app
     get:
+      servers:
+        - url: https://economic-agent-production.up.railway.app
+      security:
+        - ApiKeyAuth: []
       operationId: bcraDeudores
       summary: Central de Deudores por CUIT (formato XX-XXXXXXXX-X)
       parameters:
@@ -281,9 +291,11 @@ paths:
         "504": { $ref: '#/components/responses/UpstreamTimeout' }
 
   /bcra/passthrough:
-     servers:
-      - url: https://economic-agent-production.up.railway.app
     get:
+      servers:
+        - url: https://economic-agent-production.up.railway.app
+      security:
+        - ApiKeyAuth: []
       operationId: bcraPassthrough
       summary: Proxy a cualquier path público del BCRA
       parameters:
@@ -306,9 +318,11 @@ paths:
         "504": { $ref: '#/components/responses/UpstreamTimeout' }
 
   /run:
-  servers:
-      - url: https://economic-agent-production.up.railway.app
     post:
+      servers:
+        - url: https://economic-agent-production.up.railway.app
+      security:
+        - ApiKeyAuth: []
       operationId: runAgent
       summary: Ejecuta el agente económico (sync o async)
       requestBody:
@@ -337,9 +351,11 @@ paths:
         "429": { $ref: '#/components/responses/TooManyRequests' }
 
   /status/{job_id}:
-  servers:
-      - url: https://economic-agent-production.up.railway.app
     get:
+      servers:
+        - url: https://economic-agent-production.up.railway.app
+      security:
+        - ApiKeyAuth: []
       operationId: jobStatus
       summary: Estado de un job asíncrono
       parameters:
