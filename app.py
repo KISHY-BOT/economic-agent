@@ -15,6 +15,33 @@ from pydantic import BaseModel
 import requests
 
 # ======================
+# Helpers mejorados
+# ======================
+def _normalize_base(url: str) -> str:
+    u = (url or "").strip()
+    if not re.match(r"^https?://", u, flags=re.I):
+        # si falta el esquema, forzamos https://
+        u = "https://" + u.lstrip("/")
+    return u
+
+def _require_api_key(x_api_key: Optional[str]):
+    if not API_KEY:
+        return
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+def _rate_limit(key: str):
+    if RATE_LIMIT_PER_MIN <= 0:
+        return
+    now = time.time()
+    bucket = _rate_buckets.setdefault(key, [])
+    while bucket and now - bucket[0] > 60:
+        bucket.pop(0)
+    if len(bucket) >= RATE_LIMIT_PER_MIN:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    bucket.append(now)
+    
+# ======================
 # Configuración inicial
 # ======================
 # Configurar logging
@@ -72,33 +99,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ======================
-# Helpers mejorados
-# ======================
-def _normalize_base(url: str) -> str:
-    u = (url or "").strip()
-    if not re.match(r"^https?://", u, flags=re.I):
-        # si falta el esquema, forzamos https://
-        u = "https://" + u.lstrip("/")
-    return u
-
-def _require_api_key(x_api_key: Optional[str]):
-    if not API_KEY:
-        return
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
-def _rate_limit(key: str):
-    if RATE_LIMIT_PER_MIN <= 0:
-        return
-    now = time.time()
-    bucket = _rate_buckets.setdefault(key, [])
-    while bucket and now - bucket[0] > 60:
-        bucket.pop(0)
-    if len(bucket) >= RATE_LIMIT_PER_MIN:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
-    bucket.append(now)
 
 # Análisis
 try:
