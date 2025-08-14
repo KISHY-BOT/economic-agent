@@ -6,6 +6,7 @@ import json
 import atexit
 import logging
 import re
+import certifi
 from typing import Optional, Dict, Any
 
 from fastapi import FastAPI, Header, HTTPException, Request, Query
@@ -44,6 +45,9 @@ def _rate_limit(key: str):
 # ======================
 # Configuración inicial
 # ======================
+BCRA_VERIFY_SSL = os.getenv("BCRA_VERIFY_SSL", "true").lower() != "false"
+logger.info(f"BCRA verify SSL: {BCRA_VERIFY_SSL}")
+
 # Configurar logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -118,19 +122,26 @@ class RunConfig(BaseModel):
 # BCRA Passthroughs Corregidos
 # ======================
 def _bcra_get(path: str, params: Optional[Dict[str, Any]] = None):
-    base = _normalize_base(BCRA_BASE)
-    url = base.rstrip("/") + "/" + path.lstrip("/")
+    url = _BCRA_BASE.rstrip("/") + "/" + path.lstrip("/")
     try:
         logger.info(f"Request to BCRA: {url}")
-        r = requests.get(url, params=params, timeout=BCRA_TIMEOUT)
+        verify_param = certifi.where() if BCRA_VERIFY_SSL else False
+        r = requests.get(url, params=params, timeout=BCRA_TIMEOUT, verify=verify_param)
         r.raise_for_status()
 
-        # Manejar diferentes tipos de respuesta
-        content_type = r.headers.get('Content-Type', '')
-        if 'application/json' in content_type:
+        content_type = r.headers.get("Content-Type", "")
+        if "application/json" in content_type:
             return r.json()
         else:
             return {"content": r.text, "content_type": content_type}
+
+    except requests.exceptions.SSLError as e:
+        logger.error(f"BCRA SSL error: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail="Fallo de verificación SSL con BCRA. "
+                   "Revise el trust store o defina BCRA_VERIFY_SSL=false para diagnóstico temporal."
+        )
 
     except requests.HTTPError as e:
         error_detail = r.text if r.text else str(e)
