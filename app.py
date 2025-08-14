@@ -45,9 +45,6 @@ def _rate_limit(key: str):
 # ======================
 # Configuración inicial
 # ======================
-BCRA_VERIFY_SSL = os.getenv("BCRA_VERIFY_SSL", "true").lower() != "false"
-logger.info(f"BCRA verify SSL: {BCRA_VERIFY_SSL}")
-
 # Configurar logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -56,6 +53,9 @@ logging.basicConfig(level=logging.INFO)
 API_KEY = os.getenv("API_KEY")
 BCRA_BASE = os.getenv("BCRA_BASE_URL", "https://api.bcra.gob.ar")
 BCRA_TIMEOUT = int(os.getenv("BCRA_TIMEOUT", "60"))
+BCRA_VERIFY_SSL = os.getenv("BCRA_VERIFY_SSL", "true").lower() != "false"
+
+logger.info(f"BCRA verify SSL: {BCRA_VERIFY_SSL}")
 
 if not BCRA_BASE:
     logger.error("BCRA_BASE_URL no está configurada")
