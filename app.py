@@ -30,6 +30,11 @@ if not BCRA_BASE:
     logger.error("BCRA_BASE_URL no está configurada")
     raise RuntimeError("BCRA_BASE_URL no configurada")
 
+# Normalizar y loguear la base del BCRA
+_BCRA_BASE = _normalize_base(BCRA_BASE)
+logger.info(f"BCRA_BASE_URL (env): {BCRA_BASE!r}")
+logger.info(f"BCRA_BASE efectivo usado: {_BCRA_BASE!r}")
+
 RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "60"))
 
 # Persistencia de jobs
@@ -71,6 +76,13 @@ app.add_middleware(
 # ======================
 # Helpers mejorados
 # ======================
+def _normalize_base(url: str) -> str:
+    u = (url or "").strip()
+    if not re.match(r"^https?://", u, flags=re.I):
+        # si falta el esquema, forzamos https://
+        u = "https://" + u.lstrip("/")
+    return u
+
 def _require_api_key(x_api_key: Optional[str]):
     if not API_KEY:
         return
@@ -106,7 +118,8 @@ class RunConfig(BaseModel):
 # BCRA Passthroughs Corregidos
 # ======================
 def _bcra_get(path: str, params: Optional[Dict[str, Any]] = None):
-    url = BCRA_BASE.rstrip("/") + "/" + path.lstrip("/")
+    base = _normalize_base(BCRA_BASE)
+    url = base.rstrip("/") + "/" + path.lstrip("/")
     try:
         logger.info(f"Request to BCRA: {url}")
         r = requests.get(url, params=params, timeout=BCRA_TIMEOUT)
