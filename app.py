@@ -8,8 +8,9 @@ import logging
 import re
 import certifi
 from typing import Optional, Dict, Any
+from datetime import datetime
 
-from fastapi import FastAPI, Header, HTTPException, Request, Query
+from fastapi import FastAPI, Header, HTTPException, Request, Query, Path
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -21,9 +22,16 @@ import requests
 def _normalize_base(url: str) -> str:
     u = (url or "").strip()
     if not re.match(r"^https?://", u, flags=re.I):
-        # si falta el esquema, forzamos https://
         u = "https://" + u.lstrip("/")
     return u
+
+def _validate_iso_date(date_str: str) -> bool:
+    """Valida que una cadena tenga el formato YYYY-MM-DD."""
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
 
 def _require_api_key(x_api_key: Optional[str]):
     if not API_KEY:
@@ -41,7 +49,7 @@ def _rate_limit(key: str):
     if len(bucket) >= RATE_LIMIT_PER_MIN:
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
     bucket.append(now)
-    
+
 # ======================
 # Configuración inicial
 # ======================
@@ -125,7 +133,8 @@ def _bcra_get(path: str, params: Optional[Dict[str, Any]] = None):
     url = _BCRA_BASE.rstrip("/") + "/" + path.lstrip("/")
     try:
         logger.info(f"Request to BCRA: {url}")
-        verify_param = certifi.where() if BCRA_VERIFY_SSL else False
+        # Usar certificados del sistema para verificación SSL
+        verify_param = "/etc/ssl/certs/ca-certificates.crt" if BCRA_VERIFY_SSL else False
         r = requests.get(url, params=params, timeout=BCRA_TIMEOUT, verify=verify_param)
         r.raise_for_status()
 
@@ -166,7 +175,84 @@ def _bcra_get(path: str, params: Optional[Dict[str, Any]] = None):
         logger.error(f"BCRA connection error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
 
-# Rutas BCRA actualizadas según documentación oficial
+# ---- Endpoints BCRA actualizados ----
+
+# Cheques: Listado de entidades bancarias
+@app.get("/bcra/cheques/entidades")
+def cheques_entidades(
+    x_api_key: Optional[str] = Header(default=None),
+    request: Request = None
+):
+    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
+    return _bcra_get("/cheques/v1.0/entidades")
+
+# Cheques: Consulta por entidad y número de cheque
+@app.get("/bcra/cheques/denunciados/{codigo_entidad}/{numero_cheque}")
+def cheques_denunciados(
+    codigo_entidad: int,
+    numero_cheque: int,
+    x_api_key: Optional[str] = Header(default=None),
+    request: Request = None
+):
+    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
+    return _bcra_get(f"/cheques/v1.0/denunciados/{codigo_entidad}/{numero_cheque}")
+
+# Deudores: Informe por CUIT/CUIL/CDI
+@app.get("/bcra/deudores/{identificacion}")
+def deudores(
+    identificacion: str = Path(..., regex=r"^\d{11}$"),  # 11 dígitos sin guiones
+    x_api_key: Optional[str] = Header(default=None),
+    request: Request = None
+):
+    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
+    return _bcra_get(f"/CentralDeDeudores/v1.0/Deudas/{identificacion}")
+
+# Estadísticas Cambiarias: Maestro de divisas
+@app.get("/bcra/estadisticas-cambiarias/maestros/divisas")
+def cambiarias_maestros_divisas(
+    x_api_key: Optional[str] = Header(default=None),
+    request: Request = None
+):
+    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
+    return _bcra_get("/estadisticascambiarias/v1.0/Maestros/Divisas")
+
+# Estadísticas Cambiarias: Cotizaciones por fecha
+@app.get("/bcra/estadisticas-cambiarias/cotizaciones")
+def cambiarias_cotizaciones(
+    fecha: Optional[str] = None,
+    x_api_key: Optional[str] = Header(default=None),
+    request: Request = None
+):
+    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
+    # Validar formato de fecha si se proporciona
+    if fecha and not _validate_iso_date(fecha):
+        raise HTTPException(status_code=400, detail="Formato de fecha inválido. Use YYYY-MM-DD")
+    params = {"fecha": fecha} if fecha else None
+    return _bcra_get("/estadisticascambiarias/v1.0/Cotizaciones", params=params)
+
+# Estadísticas Cambiarias: Evolución de cotización de una moneda
+@app.get("/bcra/estadisticas-cambiarias/cotizaciones/{moneda}")
+def cambiarias_evolucion(
+    moneda: str,
+    fechadesde: Optional[str] = None,
+    fechahasta: Optional[str] = None,
+    x_api_key: Optional[str] = Header(default=None),
+    request: Request = None
+):
+    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
+    # Validar fechas si se proporcionan
+    if fechadesde and not _validate_iso_date(fechadesde):
+        raise HTTPException(status_code=400, detail="Formato de 'fechadesde' inválido. Use YYYY-MM-DD")
+    if fechahasta and not _validate_iso_date(fechahasta):
+        raise HTTPException(status_code=400, detail="Formato de 'fechahasta' inválido. Use YYYY-MM-DD")
+    params = {}
+    if fechadesde:
+        params["fechadesde"] = fechadesde
+    if fechahasta:
+        params["fechahasta"] = fechahasta
+    return _bcra_get(f"/estadisticascambiarias/v1.0/Cotizaciones/{moneda}", params=params)
+
+# Monetarias: Datos de series por ID de variable
 @app.get("/bcra/monetarias/{id_var}")
 def monetarias(
     id_var: int,
@@ -176,11 +262,17 @@ def monetarias(
     request: Request = None
 ):
     _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
+    # Validar fechas si se proporcionan
+    if desde and not _validate_iso_date(desde):
+        raise HTTPException(status_code=400, detail="Formato de 'desde' inválido. Use YYYY-MM-DD")
+    if hasta and not _validate_iso_date(hasta):
+        raise HTTPException(status_code=400, detail="Formato de 'hasta' inválido. Use YYYY-MM-DD")
     params = {}
     if desde: params["desde"] = desde
     if hasta: params["hasta"] = hasta
     return _bcra_get(f"/estadisticas/v3.0/monetarias/{id_var}", params=params or None)
 
+# Principales Variables: Lista
 @app.get("/bcra/principales-variables")
 def principales_variables_list(
     x_api_key: Optional[str] = Header(default=None),
@@ -189,6 +281,7 @@ def principales_variables_list(
     _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
     return _bcra_get("/estadisticas/v1.0/principalesvariables")
 
+# Principales Variables: Datos por variable
 @app.get("/bcra/principales-variables/{variable_id}")
 def principales_variables_data(
     variable_id: int,
@@ -198,38 +291,7 @@ def principales_variables_data(
     _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
     return _bcra_get(f"/estadisticas/v1.0/principalesvariables/{variable_id}")
 
-@app.get("/bcra/estadisticas-cambiarias/cotizaciones")
-def cambiarias_cotizaciones(
-    x_api_key: Optional[str] = Header(default=None),
-    request: Request = None
-):
-    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
-    return _bcra_get("/estadisticas/v1.0/Cotizaciones")
-
-@app.get("/bcra/cheques-denunciados")
-def cheques_denunciados(
-    numero: Optional[str] = None,
-    cuit: Optional[str] = None,
-    x_api_key: Optional[str] = Header(default=None),
-    request: Request = None
-):
-    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
-    params = {}
-    if numero: params["numero"] = numero
-    if cuit: params["cuit"] = cuit
-    return _bcra_get("/cheques/v1.0/cheques", params=params or None)
-
-@app.get("/bcra/deudores")
-def deudores(
-    cuit: str = Query(..., regex=r"^\d{2}-\d{8}-\d{1}$"),
-    x_api_key: Optional[str] = Header(default=None),
-    request: Request = None
-):
-    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
-    # Limpiar formato CUIT (20-12345678-9 → 20123456789)
-    clean_cuit = cuit.replace("-", "")
-    return _bcra_get(f"/deudores/v1.0/informe/{clean_cuit}")
-
+# Passthrough genérico
 @app.get("/bcra/passthrough")
 def bcra_passthrough(
     path: str = Query(...),
