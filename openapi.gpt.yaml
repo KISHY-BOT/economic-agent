@@ -5,6 +5,7 @@ info:
 
 servers:
   - url: https://economic-agent-production.up.railway.app
+    description: Production server
 
 security:
   - ApiKeyAuth: []
@@ -40,7 +41,6 @@ components:
         async_mode:
           type: boolean
           default: false
-      # (Se quitó 'required: [horizon]' para alinear con el default del backend)
 
     AgentResult:
       type: object
@@ -135,6 +135,8 @@ components:
       description: API key inválida o ausente.
     TooManyRequests:
       description: Rate limit excedido.
+    BadRequest:
+      description: Parámetros inválidos (ej. fecha mal formateada, identificación incorrecta).
     UpstreamError:
       description: Error del upstream BCRA.
     UpstreamTimeout:
@@ -169,12 +171,10 @@ paths:
             text/plain:
               schema:
                 type: string
-  
+
   /metrics.json:
     get:
-      servers:
-        - url: https://economic-agent-production.up.railway.app
-      security: []   # igual que /metrics: sin API key
+      security: []
       operationId: metricsJson
       summary: Métricas en formato JSON
       responses:
@@ -190,14 +190,204 @@ paths:
                   econ_jobs_done:    { type: integer }
                   econ_jobs_failed:  { type: integer }
 
-  /bcra/principales-variables:
+  # ============= BCRA Endpoints =============
+  /bcra/cheques/entidades:
     get:
-      servers:
-        - url: https://economic-agent-production.up.railway.app
+      operationId: chequesEntidades
+      summary: Listado de entidades bancarias
       security:
         - ApiKeyAuth: []
-      operationId: bcraPrincipalesVariables
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BcraPassthroughResponse'
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/TooManyRequests' }
+        "502": { $ref: '#/components/responses/UpstreamError' }
+        "504": { $ref: '#/components/responses/UpstreamTimeout' }
+
+  /bcra/cheques/denunciados/{codigo_entidad}/{numero_cheque}:
+    get:
+      operationId: chequesDenunciados
+      summary: Consulta si un cheque está denunciado
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - in: path
+          name: codigo_entidad
+          required: true
+          schema: { type: integer }
+        - in: path
+          name: numero_cheque
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BcraPassthroughResponse'
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/TooManyRequests' }
+        "502": { $ref: '#/components/responses/UpstreamError' }
+        "504": { $ref: '#/components/responses/UpstreamTimeout' }
+
+  /bcra/deudores/{identificacion}:
+    get:
+      operationId: deudores
+      summary: Central de Deudores por identificación (11 dígitos)
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - in: path
+          name: identificacion
+          required: true
+          schema:
+            type: string
+            pattern: "^[0-9]{11}$"
+            example: "20123456789"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BcraPassthroughResponse'
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/TooManyRequests' }
+        "502": { $ref: '#/components/responses/UpstreamError' }
+        "504": { $ref: '#/components/responses/UpstreamTimeout' }
+
+  /bcra/estadisticas-cambiarias/maestros/divisas:
+    get:
+      operationId: cambiariasMaestrosDivisas
+      summary: Maestro de divisas (monedas ISO)
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BcraPassthroughResponse'
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/TooManyRequests' }
+        "502": { $ref: '#/components/responses/UpstreamError' }
+        "504": { $ref: '#/components/responses/UpstreamTimeout' }
+
+  /bcra/estadisticas-cambiarias/cotizaciones:
+    get:
+      operationId: cambiariasCotizaciones
+      summary: Cotizaciones cambiarias del BCRA (última o por fecha)
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - in: query
+          name: fecha
+          schema:
+            type: string
+            format: date
+            example: "2025-08-14"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BcraPassthroughResponse'
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/TooManyRequests' }
+        "502": { $ref: '#/components/responses/UpstreamError' }
+        "504": { $ref: '#/components/responses/UpstreamTimeout' }
+
+  /bcra/estadisticas-cambiarias/cotizaciones/{moneda}:
+    get:
+      operationId: cambiariasEvolucion
+      summary: Evolución histórica de cotización de una moneda
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - in: path
+          name: moneda
+          required: true
+          schema:
+            type: string
+            example: "EUR"
+        - in: query
+          name: fechadesde
+          schema:
+            type: string
+            format: date
+            example: "2025-08-01"
+        - in: query
+          name: fechahasta
+          schema:
+            type: string
+            format: date
+            example: "2025-08-14"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BcraPassthroughResponse'
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/TooManyRequests' }
+        "502": { $ref: '#/components/responses/UpstreamError' }
+        "504": { $ref: '#/components/responses/UpstreamTimeout' }
+
+  /bcra/monetarias/{id_var}:
+    get:
+      operationId: monetarias
+      summary: Serie monetaria v3 por ID con filtro de fechas
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - in: path
+          name: id_var
+          required: true
+          schema: { type: integer }
+          example: 7
+        - in: query
+          name: desde
+          schema:
+            type: string
+            format: date
+            example: "2025-08-05"
+        - in: query
+          name: hasta
+          schema:
+            type: string
+            format: date
+            example: "2025-08-11"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BcraPassthroughResponse'
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "429": { $ref: '#/components/responses/TooManyRequests' }
+        "502": { $ref: '#/components/responses/UpstreamError' }
+        "504": { $ref: '#/components/responses/UpstreamTimeout' }
+
+  /bcra/principales-variables:
+    get:
+      operationId: principalesVariablesList
       summary: Listado de principales variables del BCRA
+      security:
+        - ApiKeyAuth: []
       responses:
         "200":
           description: OK
@@ -212,12 +402,10 @@ paths:
 
   /bcra/principales-variables/{variable_id}:
     get:
-      servers:
-        - url: https://economic-agent-production.up.railway.app
+      operationId: principalesVariablesData
+      summary: Series de una variable del BCRA
       security:
         - ApiKeyAuth: []
-      operationId: bcraPrincipalesVariablesData
-      summary: Series de una variable del BCRA
       parameters:
         - in: path
           name: variable_id
@@ -235,129 +423,18 @@ paths:
         "502": { $ref: '#/components/responses/UpstreamError' }
         "504": { $ref: '#/components/responses/UpstreamTimeout' }
 
-  /bcra/monetarias/{id_var}:
-    get:
-      servers:
-        - url: https://economic-agent-production.up.railway.app
-      security:
-        - ApiKeyAuth: []
-      operationId: bcraMonetariasById
-      summary: Serie monetaria v3 por ID con filtro de fechas
-      parameters:
-        - in: path
-          name: id_var
-          required: true
-          schema: { type: integer }
-          description: ID de la serie (p.ej. 7 = dólar oficial minorista promedio)
-        - in: query
-          name: desde
-          schema: { type: string }
-          example: "2025-08-05"
-        - in: query
-          name: hasta
-          schema: { type: string }
-          example: "2025-08-11"
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BcraPassthroughResponse'
-        "401": { $ref: '#/components/responses/Unauthorized' }
-        "429": { $ref: '#/components/responses/TooManyRequests' }
-        "502": { $ref: '#/components/responses/UpstreamError' }
-        "504": { $ref: '#/components/responses/UpstreamTimeout' }
-
-  /bcra/estadisticas-cambiarias/cotizaciones:
-    get:
-      servers:
-        - url: https://economic-agent-production.up.railway.app
-      security:
-        - ApiKeyAuth: []
-      operationId: bcraCotizaciones
-      summary: Cotizaciones cambiarias del BCRA
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BcraPassthroughResponse'
-        "401": { $ref: '#/components/responses/Unauthorized' }
-        "429": { $ref: '#/components/responses/TooManyRequests' }
-        "502": { $ref: '#/components/responses/UpstreamError' }
-        "504": { $ref: '#/components/responses/UpstreamTimeout' }
-
-  /bcra/cheques-denunciados:
-    get:
-      servers:
-        - url: https://economic-agent-production.up.railway.app
-      security:
-        - ApiKeyAuth: []
-      operationId: bcraChequesDenunciados
-      summary: Cheques denunciados
-      parameters:
-        - in: query
-          name: numero
-          schema: { type: string }
-        - in: query
-          name: cuit
-          schema: { type: string }
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BcraPassthroughResponse'
-        "401": { $ref: '#/components/responses/Unauthorized' }
-        "429": { $ref: '#/components/responses/TooManyRequests' }
-        "502": { $ref: '#/components/responses/UpstreamError' }
-        "504": { $ref: '#/components/responses/UpstreamTimeout' }
-
-  /bcra/deudores:
-    get:
-      servers:
-        - url: https://economic-agent-production.up.railway.app
-      security:
-        - ApiKeyAuth: []
-      operationId: bcraDeudores
-      summary: Central de Deudores por CUIT (formato XX-XXXXXXXX-X)
-      parameters:
-        - in: query
-          name: cuit
-          required: true
-          schema:
-            type: string
-            pattern: "^[0-9]{2}-[0-9]{8}-[0-9]{1}$"
-            example: "20-12345678-9"
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BcraPassthroughResponse'
-        "401": { $ref: '#/components/responses/Unauthorized' }
-        "429": { $ref: '#/components/responses/TooManyRequests' }
-        "502": { $ref: '#/components/responses/UpstreamError' }
-        "504": { $ref: '#/components/responses/UpstreamTimeout' }
-
   /bcra/passthrough:
     get:
-      servers:
-        - url: https://economic-agent-production.up.railway.app
-      security:
-        - ApiKeyAuth: []
       operationId: bcraPassthrough
       summary: Proxy a cualquier path público del BCRA
+      security:
+        - ApiKeyAuth: []
       parameters:
         - in: query
           name: path
           required: true
           description: >
-            Path comenzando con "/" y URL-encoded. Ej: /estadisticas/v1.0/principalesvariables
+            Path comenzando con "/" y URL-encoded. Ej: /estadisticas/v3.0/monetarias/7
           schema: { type: string }
       responses:
         "200":
@@ -371,14 +448,13 @@ paths:
         "502": { $ref: '#/components/responses/UpstreamError' }
         "504": { $ref: '#/components/responses/UpstreamTimeout' }
 
+  # ============= Agent Endpoints =============
   /run:
     post:
-      servers:
-        - url: https://economic-agent-production.up.railway.app
-      security:
-        - ApiKeyAuth: []
       operationId: runAgent
       summary: Ejecuta el agente económico (sync o async)
+      security:
+        - ApiKeyAuth: []
       requestBody:
         required: true
         content:
@@ -406,12 +482,10 @@ paths:
 
   /status/{job_id}:
     get:
-      servers:
-        - url: https://economic-agent-production.up.railway.app
-      security:
-        - ApiKeyAuth: []
       operationId: jobStatus
       summary: Estado de un job asíncrono
+      security:
+        - ApiKeyAuth: []
       parameters:
         - in: path
           name: job_id
