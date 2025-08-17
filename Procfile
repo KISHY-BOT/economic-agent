@@ -1,2 +1,2 @@
-web: uvicorn app:app --host 0.0.0.0 --port ${PORT}
+web: uvicorn app:app --host 0.0.0.0 --port 8080
 worker: python worker.py
