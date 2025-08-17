@@ -12,7 +12,7 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 
 import requests
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Query, Path
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -24,6 +24,7 @@ def _normalize_base(url: str) -> str:
     return u
 
 def _validate_iso_date(date_str: str) -> bool:
+    """Valida que una cadena tenga el formato YYYY-MM-DD."""
     try:
         datetime.strptime(date_str, "%Y-%m-%d")
         return True
@@ -116,20 +117,17 @@ def _log_tls_env(prefix: str = "TLS(app)"):
         logger.info("%s OpenSSL: %s", prefix, getattr(ssl, "OPENSSL_VERSION", "<unknown>"))
     except Exception as e:
         logger.warning("%s OpenSSL: <error> %s", prefix, e)
-
     try:
         import requests.certs as rc
         logger.info("%s certifi.where(): %s", prefix, certifi.where())
         logger.info("%s requests.certs.where(): %s", prefix, rc.where())
     except Exception as e:
         logger.warning("%s cert paths error: %s", prefix, e)
-
     try:
         dvp = ssl.get_default_verify_paths()
         logger.info("%s default verify paths: cafile=%s capath=%s", prefix, dvp.cafile, dvp.capath)
     except Exception as e:
         logger.warning("%s ssl.get_default_verify_paths() error: %s", prefix, e)
-
     system_bundle = os.getenv("REQUESTS_CA_BUNDLE") or os.getenv("SSL_CERT_FILE")
     verify_param = (system_bundle or certifi.where()) if BCRA_VERIFY_SSL else False
     logger.info("%s VERIFY_ENABLED=%s, VERIFY_PARAM=%s", prefix, BCRA_VERIFY_SSL, verify_param)
@@ -191,6 +189,9 @@ def metrics_json():
         "econ_jobs_failed": failed,
     }
 
+# ======================
+# BCRA endpoints existentes
+# ======================
 @app.get("/bcra/principales-variables")
 def principales_variables():
     try:
@@ -199,7 +200,7 @@ def principales_variables():
         raise HTTPException(status_code=502, detail="Upstream BCRA error")
 
 @app.get("/bcra/principales-variables/{id_var}")
-def principales_variable(id_var: int):
+def principales_variable(id_var: int = Path(...)):
     try:
         return _bcra_get(f"estadisticas/v1.0/principalesvariables/{id_var}")
     except Exception as e:
@@ -212,6 +213,148 @@ def cheques_entidades():
     except Exception as e:
         raise HTTPException(status_code=502, detail="Upstream BCRA error")
 
+# ======================
+# BCRA stubs adicionales (ajustados a docs oficiales)
+# ======================
+
+@app.get("/bcra/cheques/denunciados/{codigo_entidad}/{numero_cheque}")
+def cheques_denunciados(
+    codigo_entidad: int = Path(..., ge=0),
+    numero_cheque: int = Path(..., ge=0),
+):
+    """
+    Cheques denunciados (según doc BCRA):
+    GET /cheques/v1.0/denunciados/{codigoEntidad}/{numeroCheque}
+    """
+    try:
+        return _bcra_get(f"cheques/v1.0/denunciados/{codigo_entidad}/{numero_cheque}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Upstream BCRA error")
+
+@app.get("/bcra/deudores/{identificacion}")
+def deudores_por_identificacion(identificacion: str = Path(..., pattern=r"^\d{11}$")):
+    """
+    Central de Deudores (según doc BCRA):
+    GET /CentralDeDeudores/v1.0/Deudas/{identificacion}  (11 dígitos)
+    """
+    try:
+        return _bcra_get(f"CentralDeDeudores/v1.0/Deudas/{identificacion}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Upstream BCRA error")
+
+@app.get("/bcra/estadisticas-cambiarias/maestros/divisas")
+def cambiarias_maestros_divisas():
+    """
+    Maestro de monedas (según doc BCRA):
+    GET /estadisticascambiarias/v1.0/Maestros/Divisas
+    """
+    try:
+        return _bcra_get("estadisticascambiarias/v1.0/Maestros/Divisas")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Upstream BCRA error")
+
+@app.get("/bcra/estadisticas-cambiarias/cotizaciones")
+def cambiarias_cotizaciones(
+    fecha: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+):
+    """
+    Cotizaciones por fecha (según doc BCRA):
+    GET /estadisticascambiarias/v1.0/Cotizaciones?fecha=yyyy-MM-dd
+    """
+    try:
+        params = {}
+        if fecha:
+            if not _validate_iso_date(fecha):
+                raise HTTPException(status_code=400, detail="fecha inválida (YYYY-MM-DD)")
+            params["fecha"] = fecha
+        return _bcra_get("estadisticascambiarias/v1.0/Cotizaciones", params=params or None)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Upstream BCRA error")
+
+@app.get("/bcra/estadisticas-cambiarias/cotizaciones/{moneda}")
+def cambiarias_evolucion(
+    moneda: str = Path(..., min_length=3, max_length=3),
+    fechadesde: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    fechahasta: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    limit: Optional[int] = Query(default=None, ge=10, le=1000),
+    offset: Optional[int] = Query(default=None, ge=0),
+):
+    """
+    Evolución de moneda (según doc BCRA):
+    GET /estadisticascambiarias/v1.0/Cotizaciones/{moneda}?fechadesde=&fechahasta=&limit=&offset=
+    """
+    try:
+        params = {}
+        if fechadesde:
+            if not _validate_iso_date(fechadesde):
+                raise HTTPException(status_code=400, detail="fechadesde inválida (YYYY-MM-DD)")
+            params["fechadesde"] = fechadesde
+        if fechahasta:
+            if not _validate_iso_date(fechahasta):
+                raise HTTPException(status_code=400, detail="fechahasta inválida (YYYY-MM-DD)")
+            params["fechahasta"] = fechahasta
+        if limit is not None:
+            params["limit"] = limit
+        if offset is not None:
+            params["offset"] = offset
+        return _bcra_get(f"estadisticascambiarias/v1.0/Cotizaciones/{moneda.upper()}", params=params or None)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Upstream BCRA error")
+
+@app.get("/bcra/monetarias/{id_var}")
+def monetarias_v3(
+    id_var: int = Path(..., ge=0),
+    desde: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    hasta: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    limit: Optional[int] = Query(default=None, ge=1, le=3000),
+    offset: Optional[int] = Query(default=None, ge=0),
+):
+    """
+    Serie monetaria v3.0 por ID con filtro de fechas/paginado (según doc BCRA):
+    GET /estadisticas/v3.0/monetarias/{IdVariable}?desde=&hasta=&limit=&offset=
+    """
+    try:
+        params = {}
+        if desde:
+            if not _validate_iso_date(desde):
+                raise HTTPException(status_code=400, detail="desde inválida (YYYY-MM-DD)")
+            params["desde"] = desde
+        if hasta:
+            if not _validate_iso_date(hasta):
+                raise HTTPException(status_code=400, detail="hasta inválida (YYYY-MM-DD)")
+            params["hasta"] = hasta
+        if limit is not None:
+            params["limit"] = limit
+        if offset is not None:
+            params["offset"] = offset
+        return _bcra_get(f"estadisticas/v3.0/monetarias/{id_var}", params=params or None)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Upstream BCRA error")
+
+@app.get("/bcra/passthrough")
+def bcra_passthrough(
+    path: str = Query(..., description="Path comenzando con '/', ej: /estadisticas/v3.0/monetarias/7")
+):
+    """
+    Proxy genérico a cualquier path público del BCRA.
+    """
+    p = (path or "").strip()
+    if not p.startswith("/"):
+        raise HTTPException(status_code=400, detail="path debe comenzar con '/'")
+    try:
+        return _bcra_get(p.lstrip("/"))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Upstream BCRA error")
+
+# ======================
+# Agent runner (sync/async) — sin cambios
+# ======================
 class AgentResult(BaseModel):
     model_config = {"extra": "allow"}
 
@@ -277,4 +420,3 @@ def job_status(
     if job_id not in _jobs:
         raise HTTPException(status_code=404, detail="Job no encontrado")
     return _jobs[job_id]
-    
