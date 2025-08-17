@@ -6,19 +6,17 @@ import json
 import atexit
 import logging
 import re
+import ssl
 import certifi
 from typing import Optional, Dict, Any
 from datetime import datetime
 
-from fastapi import FastAPI, Header, HTTPException, Request, Query, Path
+import requests
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import requests
 
-# ======================
-# Helpers mejorados
-# ======================
 def _normalize_base(url: str) -> str:
     u = (url or "").strip()
     if not re.match(r"^https?://", u, flags=re.I):
@@ -26,7 +24,6 @@ def _normalize_base(url: str) -> str:
     return u
 
 def _validate_iso_date(date_str: str) -> bool:
-    """Valida que una cadena tenga el formato YYYY-MM-DD."""
     try:
         datetime.strptime(date_str, "%Y-%m-%d")
         return True
@@ -50,39 +47,29 @@ def _rate_limit(key: str):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
     bucket.append(now)
 
-# ======================
-# Configuración inicial
-# ======================
-# Configurar logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Validar variables críticas
 API_KEY = os.getenv("API_KEY")
 BCRA_BASE = os.getenv("BCRA_BASE_URL", "https://api.bcra.gob.ar")
 BCRA_TIMEOUT = int(os.getenv("BCRA_TIMEOUT", "60"))
 BCRA_VERIFY_SSL = os.getenv("BCRA_VERIFY_SSL", "true").lower() != "false"
 
 logger.info(f"BCRA verify SSL: {BCRA_VERIFY_SSL}")
-
 if not BCRA_BASE:
     logger.error("BCRA_BASE_URL no está configurada")
     raise RuntimeError("BCRA_BASE_URL no configurada")
 
-# Normalizar y loguear la base del BCRA
 _BCRA_BASE = _normalize_base(BCRA_BASE)
 logger.info(f"BCRA_BASE_URL (env): {BCRA_BASE!r}")
 logger.info(f"BCRA_BASE efectivo usado: {_BCRA_BASE!r}")
 
 RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "60"))
 
-# Persistencia de jobs
 JOBS_FILE = "jobs.json"
-
 _rate_buckets: Dict[str, list] = {}
 _jobs: Dict[str, Dict[str, Any]] = {}
 
-# Cargar jobs persistentes
 try:
     if os.path.exists(JOBS_FILE):
         with open(JOBS_FILE, "r") as f:
@@ -91,7 +78,6 @@ try:
 except Exception as e:
     logger.error(f"Error cargando jobs: {str(e)}")
 
-# Guardar jobs al salir
 def _save_jobs():
     try:
         with open(JOBS_FILE, "w") as f:
@@ -112,7 +98,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Análisis
 try:
     import analysis_agent
 except Exception as e:
@@ -126,232 +111,112 @@ class RunConfig(BaseModel):
     notes: Optional[str] = None
     async_mode: bool = False
 
-# ======================
-# BCRA Passthroughs Corregidos
-# ======================
+def _log_tls_env(prefix: str = "TLS(app)"):
+    try:
+        logger.info("%s OpenSSL: %s", prefix, getattr(ssl, "OPENSSL_VERSION", "<unknown>"))
+    except Exception as e:
+        logger.warning("%s OpenSSL: <error> %s", prefix, e)
+
+    try:
+        import requests.certs as rc
+        logger.info("%s certifi.where(): %s", prefix, certifi.where())
+        logger.info("%s requests.certs.where(): %s", prefix, rc.where())
+    except Exception as e:
+        logger.warning("%s cert paths error: %s", prefix, e)
+
+    try:
+        dvp = ssl.get_default_verify_paths()
+        logger.info("%s default verify paths: cafile=%s capath=%s", prefix, dvp.cafile, dvp.capath)
+    except Exception as e:
+        logger.warning("%s ssl.get_default_verify_paths() error: %s", prefix, e)
+
+    system_bundle = os.getenv("REQUESTS_CA_BUNDLE") or os.getenv("SSL_CERT_FILE")
+    verify_param = (system_bundle or certifi.where()) if BCRA_VERIFY_SSL else False
+    logger.info("%s VERIFY_ENABLED=%s, VERIFY_PARAM=%s", prefix, BCRA_VERIFY_SSL, verify_param)
+
+@app.on_event("startup")
+def on_startup():
+    _log_tls_env()
+
 def _bcra_get(path: str, params: Optional[Dict[str, Any]] = None):
     url = _BCRA_BASE.rstrip("/") + "/" + path.lstrip("/")
     try:
         logger.info(f"Request to BCRA: {url}")
-        # Usar certificados del sistema para verificación SSL
-        verify_param = "/etc/ssl/certs/ca-certificates.crt" if BCRA_VERIFY_SSL else False
+        system_bundle = os.getenv("REQUESTS_CA_BUNDLE") or os.getenv("SSL_CERT_FILE")
+        verify_param = (system_bundle or certifi.where()) if BCRA_VERIFY_SSL else False
+
         r = requests.get(url, params=params, timeout=BCRA_TIMEOUT, verify=verify_param)
         r.raise_for_status()
 
         content_type = r.headers.get("Content-Type", "")
         if "application/json" in content_type:
             return r.json()
-        else:
-            return {"content": r.text, "content_type": content_type}
+        return r.text
 
     except requests.exceptions.SSLError as e:
         logger.error(f"BCRA SSL error: {e}")
-        raise HTTPException(
-            status_code=502,
-            detail="Fallo de verificación SSL con BCRA. "
-                   "Revise el trust store o defina BCRA_VERIFY_SSL=false para diagnóstico temporal."
-        )
+        raise
+    except requests.exceptions.RequestException as e:
+        logger.error(f"BCRA HTTP error: {e}")
+        raise
 
-    except requests.HTTPError as e:
-        error_detail = r.text if r.text else str(e)
-        if len(error_detail) > 500:
-            error_detail = error_detail[:500] + "... [truncated]"
-
-        logger.error(f"BCRA error {r.status_code}: {error_detail}")
-
-        if r.status_code == 404:
-            raise HTTPException(status_code=404, detail="Recurso no encontrado")
-        else:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Error BCRA [{r.status_code}]: {error_detail}"
-            )
-
-    except requests.Timeout:
-        logger.error("BCRA timeout")
-        raise HTTPException(status_code=504, detail="Timeout al conectar con BCRA")
-
-    except Exception as e:
-        logger.error(f"BCRA connection error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
-
-# ---- Endpoints BCRA actualizados ----
-
-# Cheques: Listado de entidades bancarias
-@app.get("/bcra/cheques/entidades")
-def cheques_entidades(
-    x_api_key: Optional[str] = Header(default=None),
-    request: Request = None
-):
-    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
-    return _bcra_get("/cheques/v1.0/entidades")
-
-# Cheques: Consulta por entidad y número de cheque
-@app.get("/bcra/cheques/denunciados/{codigo_entidad}/{numero_cheque}")
-def cheques_denunciados(
-    codigo_entidad: int,
-    numero_cheque: int,
-    x_api_key: Optional[str] = Header(default=None),
-    request: Request = None
-):
-    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
-    return _bcra_get(f"/cheques/v1.0/denunciados/{codigo_entidad}/{numero_cheque}")
-
-# Deudores: Informe por CUIT/CUIL/CDI
-@app.get("/bcra/deudores/{identificacion}")
-def deudores(
-    identificacion: str = Path(..., regex=r"^\d{11}$"),  # 11 dígitos sin guiones
-    x_api_key: Optional[str] = Header(default=None),
-    request: Request = None
-):
-    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
-    return _bcra_get(f"/CentralDeDeudores/v1.0/Deudas/{identificacion}")
-
-# Estadísticas Cambiarias: Maestro de divisas
-@app.get("/bcra/estadisticas-cambiarias/maestros/divisas")
-def cambiarias_maestros_divisas(
-    x_api_key: Optional[str] = Header(default=None),
-    request: Request = None
-):
-    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
-    return _bcra_get("/estadisticascambiarias/v1.0/Maestros/Divisas")
-
-# Estadísticas Cambiarias: Cotizaciones por fecha
-@app.get("/bcra/estadisticas-cambiarias/cotizaciones")
-def cambiarias_cotizaciones(
-    fecha: Optional[str] = None,
-    x_api_key: Optional[str] = Header(default=None),
-    request: Request = None
-):
-    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
-    # Validar formato de fecha si se proporciona
-    if fecha and not _validate_iso_date(fecha):
-        raise HTTPException(status_code=400, detail="Formato de fecha inválido. Use YYYY-MM-DD")
-    params = {"fecha": fecha} if fecha else None
-    return _bcra_get("/estadisticascambiarias/v1.0/Cotizaciones", params=params)
-
-# Estadísticas Cambiarias: Evolución de cotización de una moneda
-@app.get("/bcra/estadisticas-cambiarias/cotizaciones/{moneda}")
-def cambiarias_evolucion(
-    moneda: str,
-    fechadesde: Optional[str] = None,
-    fechahasta: Optional[str] = None,
-    x_api_key: Optional[str] = Header(default=None),
-    request: Request = None
-):
-    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
-    # Validar fechas si se proporcionan
-    if fechadesde and not _validate_iso_date(fechadesde):
-        raise HTTPException(status_code=400, detail="Formato de 'fechadesde' inválido. Use YYYY-MM-DD")
-    if fechahasta and not _validate_iso_date(fechahasta):
-        raise HTTPException(status_code=400, detail="Formato de 'fechahasta' inválido. Use YYYY-MM-DD")
-    params = {}
-    if fechadesde:
-        params["fechadesde"] = fechadesde
-    if fechahasta:
-        params["fechahasta"] = fechahasta
-    return _bcra_get(f"/estadisticascambiarias/v1.0/Cotizaciones/{moneda}", params=params)
-
-# Monetarias: Datos de series por ID de variable
-@app.get("/bcra/monetarias/{id_var}")
-def monetarias(
-    id_var: int,
-    desde: Optional[str] = None,
-    hasta: Optional[str] = None,
-    x_api_key: Optional[str] = Header(default=None),
-    request: Request = None
-):
-    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
-    # Validar fechas si se proporcionan
-    if desde and not _validate_iso_date(desde):
-        raise HTTPException(status_code=400, detail="Formato de 'desde' inválido. Use YYYY-MM-DD")
-    if hasta and not _validate_iso_date(hasta):
-        raise HTTPException(status_code=400, detail="Formato de 'hasta' inválido. Use YYYY-MM-DD")
-    params = {}
-    if desde: params["desde"] = desde
-    if hasta: params["hasta"] = hasta
-    return _bcra_get(f"/estadisticas/v3.0/monetarias/{id_var}", params=params or None)
-
-# Principales Variables: Lista
-@app.get("/bcra/principales-variables")
-def principales_variables_list(
-    x_api_key: Optional[str] = Header(default=None),
-    request: Request = None
-):
-    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
-    return _bcra_get("/estadisticas/v1.0/principalesvariables")
-
-# Principales Variables: Datos por variable
-@app.get("/bcra/principales-variables/{variable_id}")
-def principales_variables_data(
-    variable_id: int,
-    x_api_key: Optional[str] = Header(default=None),
-    request: Request = None
-):
-    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
-    return _bcra_get(f"/estadisticas/v1.0/principalesvariables/{variable_id}")
-
-# Passthrough genérico
-@app.get("/bcra/passthrough")
-def bcra_passthrough(
-    path: str = Query(...),
-    x_api_key: Optional[str] = Header(default=None),
-    request: Request = None
-):
-    _require_api_key(x_api_key); _rate_limit(request.client.host if request and request.client else "anon")
-    return _bcra_get(path)
-
-# ======================
-# Health & Metrics
-# ======================
 @app.get("/health")
 def health():
-    return {"status": "ok", "bcra_status": "active"}
+    return {"ok": True}
 
 @app.get("/metrics", response_class=PlainTextResponse)
 def metrics():
-    total_jobs = len(_jobs)
+    total = len(_jobs)
     running = sum(1 for j in _jobs.values() if j.get("status") == "running")
     done = sum(1 for j in _jobs.values() if j.get("status") == "done")
     failed = sum(1 for j in _jobs.values() if j.get("status") == "failed")
-
     lines = [
-        "# HELP econ_jobs_total Total jobs seen",
-        "# TYPE econ_jobs_total gauge",
-        f"econ_jobs_total {total_jobs}",
-        "# HELP econ_jobs_running Jobs currently running",
-        "# TYPE econ_jobs_running gauge",
+        f"econ_jobs_total {total}",
         f"econ_jobs_running {running}",
-        "# HELP econ_jobs_done Jobs finished successfully",
-        "# TYPE econ_jobs_done gauge",
         f"econ_jobs_done {done}",
-        "# HELP econ_jobs_failed Jobs failed",
-        "# TYPE econ_jobs_failed gauge",
         f"econ_jobs_failed {failed}",
     ]
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n"
 
 @app.get("/metrics.json")
 def metrics_json():
-    total_jobs = len(_jobs)
+    total = len(_jobs)
     running = sum(1 for j in _jobs.values() if j.get("status") == "running")
     done = sum(1 for j in _jobs.values() if j.get("status") == "done")
     failed = sum(1 for j in _jobs.values() if j.get("status") == "failed")
     return {
-        "econ_jobs_total": total_jobs,
+        "econ_jobs_total": total,
         "econ_jobs_running": running,
         "econ_jobs_done": done,
-        "econ_jobs_failed": failed
+        "econ_jobs_failed": failed,
     }
 
-# ======================
-# Agent Runner Mejorado
-# ======================
-def _run_agent_sync(cfg: RunConfig) -> Dict[str, Any]:
-    if analysis_agent is None:
-        raise RuntimeError("analysis_agent no disponible")
+@app.get("/bcra/principales-variables")
+def principales_variables():
+    try:
+        return _bcra_get("estadisticas/v1.0/principalesvariables")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Upstream BCRA error")
 
-    if hasattr(analysis_agent, "demonstrate_agent"):
+@app.get("/bcra/principales-variables/{id_var}")
+def principales_variable(id_var: int):
+    try:
+        return _bcra_get(f"estadisticas/v1.0/principalesvariables/{id_var}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Upstream BCRA error")
+
+@app.get("/bcra/cheques/entidades")
+def cheques_entidades():
+    try:
+        return _bcra_get("cheques/v1.0/entidades")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Upstream BCRA error")
+
+class AgentResult(BaseModel):
+    model_config = {"extra": "allow"}
+
+def _run_agent_sync(cfg: RunConfig):
+    if analysis_agent and hasattr(analysis_agent, "demonstrate_agent"):
         try:
             return analysis_agent.demonstrate_agent(
                 horizon=cfg.horizon,
@@ -361,7 +226,6 @@ def _run_agent_sync(cfg: RunConfig) -> Dict[str, Any]:
             )
         except TypeError:
             return analysis_agent.demonstrate_agent()
-
     raise RuntimeError("Función demonstrate_agent no encontrada")
 
 def _worker_thread(job_id: str, cfg: RunConfig):
@@ -397,11 +261,7 @@ def run_agent(
             "config": cfg.dict(),
             "created_at": time.time()
         }
-        threading.Thread(
-            target=_worker_thread,
-            args=(job_id, cfg),
-            daemon=True
-        ).start()
+        threading.Thread(target=_worker_thread, args=(job_id, cfg), daemon=True).start()
         _save_jobs()
         return {"job_id": job_id, "status": "queued"}
     else:
