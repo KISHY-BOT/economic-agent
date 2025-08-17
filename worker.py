@@ -11,7 +11,7 @@ except Exception as e:
     analysis_agent = None
     logging.exception("analysis_agent not importable: %s", e)
 
-INTERVAL = int(os.getenv("RUNTIME_INTERVAL_SECONDS", "21600"))
+INTERVAL = int(os.getenv("RUNTIME_INTERVAL_SECONDS", "21600"))  # default: cada 6 horas
 
 def run_once():
     logging.info("Starting analysis cycle...")
@@ -23,6 +23,7 @@ def run_once():
             try:
                 analysis_agent.demonstrate_agent()
             except TypeError:
+                # fallback si la firma no acepta kwargs
                 analysis_agent.demonstrate_agent()
         else:
             logging.error("demonstrate_agent not found in analysis_agent")
@@ -32,7 +33,7 @@ def run_once():
 
 if __name__ == "__main__":
     run_once()
-    if os.getenv("RUN_ONCE", "false").lower() in ("1","true","yes","y"):
+    if os.getenv("RUN_ONCE", "false").lower() in ("1", "true", "yes", "y"):
         logging.info("RUN_ONCE enabled -> exiting after single run.")
     else:
         logging.info("Entering loop with interval %s seconds", INTERVAL)
